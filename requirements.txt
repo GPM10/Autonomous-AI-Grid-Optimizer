@@ -1,0 +1,9 @@
+gymnasium
+stable-baselines3
+langgraph
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
