@@ -51,13 +51,50 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Enable Ray local_mode for debugging (disables parallelism).")
     parser.add_argument("--include-dashboard", action="store_true",
                         help="Expose the Ray dashboard when starting a local runtime.")
+    parser.add_argument("--episode-length", type=int, default=None,
+                        help="Episode length in timesteps. Defaults to full dataset.")
+    parser.add_argument("--grid-import-limit", type=float, default=None,
+                        help="Optional cap on grid imports per step (kW).")
+    parser.add_argument("--step-log-dir", default="",
+                        help="Directory for per-step CSV logs (one file per worker). Disabled if empty.")
+    parser.add_argument("--reward-weight-cost", type=float, default=1.0,
+                        help="Weight applied to energy cost.")
+    parser.add_argument("--reward-weight-carbon", type=float, default=0.1,
+                        help="Weight applied to carbon intensity penalty.")
+    parser.add_argument("--reward-weight-battery", type=float, default=1.0,
+                        help="Weight applied to battery health penalty.")
+    parser.add_argument("--reward-weight-unmet", type=float, default=100.0,
+                        help="Weight applied to unmet demand penalty.")
+    parser.add_argument("--reward-weight-export", type=float, default=0.2,
+                        help="Credit multiplier for exporting energy back to grid.")
     return parser
 
 
-def _register_env(default_data_path: str) -> None:
+def _register_env(args: argparse.Namespace) -> None:
+    reward_weights = {
+        "cost": args.reward_weight_cost,
+        "carbon": args.reward_weight_carbon,
+        "battery_penalty": args.reward_weight_battery,
+        "unmet_demand": args.reward_weight_unmet,
+        "export_credit": args.reward_weight_export,
+    }
+
     def creator(env_config):
-        data_path = env_config.get("data_path", default_data_path)
-        return MicrogridEnv(data_path=data_path)
+        data_path = env_config.get("data_path", args.data_path)
+        log_path = None
+        if args.step_log_dir:
+            log_dir = Path(args.step_log_dir)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            worker_index = getattr(env_config, "worker_index", env_config.get("worker_index", 0))
+            vector_index = getattr(env_config, "vector_index", env_config.get("vector_index", 0))
+            log_path = log_dir / f"steps_worker{worker_index}_env{vector_index}.csv"
+        return MicrogridEnv(
+            data_path=data_path,
+            episode_length=args.episode_length,
+            reward_weights=reward_weights,
+            log_path=str(log_path) if log_path else None,
+            grid_import_limit=args.grid_import_limit,
+        )
 
     register_env("MicrogridEnv", creator)
 
@@ -75,7 +112,7 @@ def main(args: Optional[argparse.Namespace] = None) -> None:
     parser = _build_parser()
     args = args or parser.parse_args()
 
-    _register_env(args.data_path)
+    _register_env(args)
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     init_kwargs = dict(ignore_reinit_error=True, log_to_driver=True)

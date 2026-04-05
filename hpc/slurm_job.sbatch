@@ -24,7 +24,13 @@ python -m hpc.train_distributed \
   --num-workers 16 \
   --envs-per-worker 4 \
   --num-gpus 1 \
-  --data-path data/sample_data.csv \
+  --data-path data/train_data.csv \
+  --episode-length 168 \
+  --reward-weight-carbon 0.2 \
+  --reward-weight-unmet 150.0 \
+  --reward-weight-battery 2.0 \
+  --reward-weight-export 0.4 \
+  --step-log-dir /scratch/$USER/grid-ppo/worker-logs \
   --checkpoint-freq 2 \
   --output-dir /scratch/$USER/grid-ppo
 
