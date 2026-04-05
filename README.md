@@ -33,6 +33,17 @@ env = MicrogridEnv(
 )
 ```
 
+## Live Carbon Intensity (NESO API)
+
+Great Britain’s National Energy System Operator exposes half-hourly national and regional carbon intensity endpoints such as `/intensity/{from}/{to}` and `/regional/intensity/{from}/{to}/regionid/{regionid}` (region ids 1–17 cover each DNO plus GB aggregates).citeturn4view0turn2view0
+
+Run `python data/fetch_carbon_intensity.py --hours 48 --region-id 13 --merge-dataset data/eval_data.csv` to:
+
+1. Download the latest 48 h forecast for London (region 13) into `data/carbon_intensity_live.csv`.
+2. Replace any overlapping `carbon_intensity` values in `data/eval_data.csv` with the chosen column (`--merge-column forecast|actual`).
+
+The script accepts outward postcodes (e.g., `--postcode SW1`), merges via nearest-timestamp matching (±30 min), and can also leave the live CSV standalone if you want the model to learn from historical values later.
+
 ## High-Performance / Distributed Training
 
 Ray + RLlib integration enables large-scale PPO runs across many CPU or GPU workers.
@@ -81,6 +92,7 @@ python -c "import pandas as pd; print(pd.read_csv('logs/train_steps.csv').head()
 ## Project Structure
 
 - `data/`: Dataset builder + generated CSVs (`train_data.csv`, `eval_data.csv`)
+- `data/fetch_carbon_intensity.py`: NESO Carbon Intensity fetch/merge helper
 - `env/`: Gymnasium environment
 - `agents/`: Agent modules
 - `graph/`: LangGraph orchestration
