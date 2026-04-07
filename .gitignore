@@ -23,3 +23,6 @@ Thumbs.db
 # Data artifacts
 *.log
 *.tmp
+data/*.sqlite
+data/*.sqlite3
+data/*.db

@@ -1,55 +1,88 @@
-from langgraph import StateGraph
-from typing import TypedDict
+from collections import deque
+from typing import Deque, List, TypedDict
 
-class State(TypedDict):
-    solar_forecast: float
-    demand_forecast: float
+from langgraph import StateGraph
+
+from agents import DemandForecaster, HybridController, SolarForecaster
+
+
+class Observation(TypedDict):
+    solar: float
+    demand: float
     battery: float
     price: float
     carbon: float
+    hour: float
+
+
+class State(TypedDict, total=False):
+    observation: Observation
+    history: List[Observation]
+    solar_forecast: float
+    demand_forecast: float
+    carbon_index: str
     action: int
+    rationale: str
 
-def forecast_agent(state):
-    # Simple forecast: use current solar
-    state['solar_forecast'] = state.get('solar', 0)
+
+solar_agent = SolarForecaster(window=6)
+demand_agent_impl = DemandForecaster(window=12)
+controller = HybridController()
+
+
+def _history(state: State) -> Deque[Observation]:
+    return deque(state.get("history", []), maxlen=48)
+
+
+def solar_agent_node(state: State) -> State:
+    obs = state["observation"]
+    state["solar_forecast"] = solar_agent(_history(state), obs["hour"])
     return state
 
-def demand_agent(state):
-    # Simple: use current demand
-    state['demand_forecast'] = state.get('demand', 0)
+
+def demand_agent_node(state: State) -> State:
+    obs = state["observation"]
+    state["demand_forecast"] = demand_agent_impl(_history(state), obs["hour"])
     return state
 
-def control_agent(state):
-    # For now, simple rule
-    net = state['solar_forecast'] - state['demand_forecast']
-    if net > 0:
-        state['action'] = 1  # charge
+
+def carbon_node(state: State) -> State:
+    carbon = state["observation"]["carbon"]
+    if carbon < 80:
+        index = "very low"
+    elif carbon < 120:
+        index = "low"
+    elif carbon < 200:
+        index = "moderate"
     else:
-        state['action'] = 2  # discharge
+        index = "high"
+    state["carbon_index"] = index
     return state
 
-def carbon_agent(state):
-    # Compute emissions based on action
-    # Placeholder
-    state['emissions'] = state.get('carbon', 0) * 1  # assume import
+
+def control_agent(state: State) -> State:
+    obs = state["observation"]
+    action, rationale = controller.decide(
+        obs,
+        state.get("solar_forecast", obs["solar"]),
+        state.get("demand_forecast", obs["demand"]),
+        state.get("carbon_index", "moderate"),
+    )
+    state["action"] = action
+    state["rationale"] = rationale
     return state
 
-# Build graph
+
 graph = StateGraph(State)
-graph.add_node("forecast", forecast_agent)
-graph.add_node("demand", demand_agent)
+graph.add_node("solar", solar_agent_node)
+graph.add_node("demand", demand_agent_node)
+graph.add_node("carbon", carbon_node)
 graph.add_node("control", control_agent)
-graph.add_node("carbon", carbon_agent)
 
-graph.add_edge("forecast", "demand")
-graph.add_edge("demand", "control")
-graph.add_edge("control", "carbon")
+graph.add_edge("solar", "demand")
+graph.add_edge("demand", "carbon")
+graph.add_edge("carbon", "control")
 
-graph.set_entry_point("forecast")
+graph.set_entry_point("solar")
 
 compiled_graph = graph.compile()
-
-# Example run
-initial_state = {"solar": 5.0, "demand": 3.0, "battery": 5.0, "price": 0.1, "carbon": 200}
-result = compiled_graph.invoke(initial_state)
-print(result)

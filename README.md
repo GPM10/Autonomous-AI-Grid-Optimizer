@@ -6,11 +6,44 @@ A carbon-aware, RL-controlled microgrid with multi-agent orchestration using Lan
 
 1. Install dependencies: `pip install -r requirements.txt`
 2. (Optional) Regenerate datasets: `python data/build_datasets.py --train-days 21 --eval-days 7`
-3. Run training: `python train.py`
-4. Evaluate: `python evaluate.py`
-5. Dashboard: `streamlit run dashboard/app.py`
+3. OPSD SQLite slice (optional): `python data/export_opsd_sqlite.py --country GB_GBN --start 2020-01-01T00:00:00Z --end 2020-01-07T23:00:00Z --resolution 60 --output data/train_data.csv`
+4. Run training: `python train.py`
+5. Evaluate: `python evaluate.py`
+6. Dashboard: `streamlit run dashboard/app.py`
 
 The dataset builder synthesizes multi-day solar/load/price/carbon profiles and writes `data/train_data.csv` and `data/eval_data.csv`. Point the scripts to your own telemetry by overriding `--data-path` (Ray launcher) or the `data_path` argument in `MicrogridEnv`.
+
+### Using the OPSD SQLite database
+
+- Download `time_series.sqlite` from [Open Power System Data](https://data.open-power-system-data.org/time_series/?utm_source=openai) and place it in `data/`.
+- Export a country slice to CSV:
+
+```
+python data/export_opsd_sqlite.py \
+  --country GB_GBN \
+  --start 2020-01-01T00:00:00Z \
+  --end 2020-01-07T23:00:00Z \
+  --resolution 60 \
+  --output data/gb_eval.csv
+```
+
+- Or bypass CSVs entirely inside Python:
+
+```python
+from data.export_opsd_sqlite import extract_opsd_slice
+from env.microgrid_env import MicrogridEnv
+
+df = extract_opsd_slice(
+    db_path="data/time_series.sqlite",
+    country="GB_GBN",
+    start="2020-01-01T00:00:00Z",
+    end="2020-01-07T23:00:00Z",
+    resolution=60,
+)
+env = MicrogridEnv(data_frame=df)
+```
+
+This keeps your training/eval datasets synced with the upstream OPSD snapshot.
 
 ## Environment Knobs
 
@@ -43,6 +76,21 @@ Run `python data/fetch_carbon_intensity.py --hours 48 --region-id 13 --merge-dat
 2. Replace any overlapping `carbon_intensity` values in `data/eval_data.csv` with the chosen column (`--merge-column forecast|actual`).
 
 The script accepts outward postcodes (e.g., `--postcode SW1`), merges via nearest-timestamp matching (±30 min), and can also leave the live CSV standalone if you want the model to learn from historical values later.
+
+## LangGraph Multi-Agent Baseline
+
+The `agents/` package now includes lightweight forecasting and control agents:
+
+- `SolarForecaster` and `DemandForecaster` compute short-horizon estimates using rolling means + diurnal heuristics.
+- `HybridController` picks actions (idle, charge, discharge, import) that balance carbon intensity, price, and battery state.
+
+`graph/langgraph_flow.py` wires these agents into a LangGraph pipeline. To run the controller in the environment:
+
+```
+python baselines/langgraph_agent.py --episodes 5 --data-path data/eval_data.csv
+```
+
+This script loops through the Gymnasium env, feeds observations + history into the compiled graph, and logs outcomes to `logs/langgraph_steps.csv`, giving you a deterministic multi-agent baseline to compare against PPO/RL runs.
 
 ## High-Performance / Distributed Training
 
@@ -93,9 +141,9 @@ python -c "import pandas as pd; print(pd.read_csv('logs/train_steps.csv').head()
 
 - `data/`: Dataset builder + generated CSVs (`train_data.csv`, `eval_data.csv`)
 - `data/fetch_carbon_intensity.py`: NESO Carbon Intensity fetch/merge helper
+- `data/export_opsd_sqlite.py`: Extract OPSD SQLite slices (CSV or direct DataFrame)
+- `agents/`: Forecasting + control agents for LangGraph
 - `env/`: Gymnasium environment
-- `agents/`: Agent modules
-- `graph/`: LangGraph orchestration
 - `baselines/`: Baseline strategies
 - `dashboard/`: Streamlit UI
 - `hpc/`: Ray-powered training entry point and SLURM template

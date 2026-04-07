@@ -6,6 +6,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+
 class MicrogridEnv(gym.Env):
     def __init__(
         self,
@@ -14,12 +15,16 @@ class MicrogridEnv(gym.Env):
         reward_weights: Optional[Dict[str, float]] = None,
         log_path: Optional[str] = None,
         grid_import_limit: Optional[float] = None,
+        data_frame=None,
     ):
         super(MicrogridEnv, self).__init__()
         
         # Load data
         import pandas as pd
-        self.data = pd.read_csv(data_path)
+        if data_frame is not None:
+            self.data = data_frame.copy()
+        else:
+            self.data = pd.read_csv(data_path)
         self.data['time'] = pd.to_datetime(self.data['time'])
         self.max_steps = len(self.data)
         self.current_step = 0
