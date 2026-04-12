@@ -26,3 +26,4 @@ Thumbs.db
 data/*.sqlite
 data/*.sqlite3
 data/*.db
+data/carbon_intensity_live.csv

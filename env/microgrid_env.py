@@ -6,6 +6,8 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from pinn import BatteryThermalPINN
+
 
 class MicrogridEnv(gym.Env):
     def __init__(
@@ -16,6 +18,10 @@ class MicrogridEnv(gym.Env):
         log_path: Optional[str] = None,
         grid_import_limit: Optional[float] = None,
         data_frame=None,
+        use_pinn: bool = False,
+        ambient_temperature: float = 25.0,
+        max_battery_temp: float = 45.0,
+        pinn_model_path: str = 'artifacts/pinn_battery.pt',
     ):
         super(MicrogridEnv, self).__init__()
         
@@ -33,6 +39,11 @@ class MicrogridEnv(gym.Env):
         self.grid_import_limit = grid_import_limit
         self.log_path = Path(log_path) if log_path else None
         self.episode_log: List[Dict[str, Any]] = []
+        self.use_pinn = use_pinn
+        self.ambient_temperature = ambient_temperature
+        self.max_battery_temp = max_battery_temp
+        self.pinn = BatteryThermalPINN(model_path=pinn_model_path) if use_pinn else None
+        self.battery_temp = ambient_temperature
 
         # Battery parameters
         self.battery_capacity = 10.0  # kWh
@@ -56,6 +67,7 @@ class MicrogridEnv(gym.Env):
             'battery_penalty': 1.0,
             'unmet_demand': 100.0,
             'export_credit': 0.2,
+            'thermal_penalty': 2.0,
         }
         if reward_weights:
             default_weights.update(reward_weights)
@@ -65,6 +77,7 @@ class MicrogridEnv(gym.Env):
         super().reset(seed=seed)
         self.current_step = 0
         self.battery_level = 5.0
+        self.battery_temp = self.ambient_temperature
         self.episode_log = []
         self._set_start_index()
         return self._get_obs(), {}
@@ -98,16 +111,19 @@ class MicrogridEnv(gym.Env):
         grid_import = 0.0
         grid_export = 0.0
         unmet_demand = 0.0
+        battery_power = 0.0
         if action == 0:  # idle
             pass
         elif action == 1:  # charge battery
             charge_amount = min(self.charge_rate, self.battery_capacity - self.battery_level)
             self.battery_level += charge_amount * self.efficiency
             net_energy -= charge_amount
+            battery_power = charge_amount
         elif action == 2:  # discharge battery
             discharge_amount = min(self.discharge_rate, self.battery_level)
             self.battery_level -= discharge_amount
             net_energy += discharge_amount * self.efficiency
+            battery_power = -discharge_amount
         elif action == 3:  # import from grid
             grid_import = max(0, -net_energy)
             net_energy += grid_import
@@ -147,6 +163,11 @@ class MicrogridEnv(gym.Env):
             + self.reward_weights['export_credit'] * export_credit
         )
 
+        if self.pinn is not None:
+            self.battery_temp = self.pinn.predict_next(self.battery_temp, battery_power, self.ambient_temperature)
+            if self.battery_temp > self.max_battery_temp:
+                reward -= self.reward_weights['thermal_penalty'] * (self.battery_temp - self.max_battery_temp)
+
         # Next step
         self.current_step += 1
         done = self.current_step >= self.episode_length
@@ -159,6 +180,7 @@ class MicrogridEnv(gym.Env):
             'grid_import': grid_import,
             'grid_export': grid_export,
             'battery_level': self.battery_level,
+            'battery_temp': self.battery_temp,
             'cost': cost,
             'emissions': emissions,
             'unmet_demand': unmet_demand,

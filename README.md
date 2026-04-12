@@ -13,6 +13,13 @@ A carbon-aware, RL-controlled microgrid with multi-agent orchestration using Lan
 
 The dataset builder synthesizes multi-day solar/load/price/carbon profiles and writes `data/train_data.csv` and `data/eval_data.csv`. Point the scripts to your own telemetry by overriding `--data-path` (Ray launcher) or the `data_path` argument in `MicrogridEnv`.
 
+### Training & Evaluation Tips
+
+- When PyPI access is restricted, install the core dependencies manually. At minimum you'll need `torch`, `pandas`, and `stable-baselines3` (Ray/RLlib is only required for the distributed launcher).
+- Run `python train.py` to (re)generate `artifacts/ppo_microgrid.zip` and `logs/train_steps.csv`. This script now honors the PINN-related kwargs set inside the env factory.
+- Run `python evaluate.py` to compare the PPO checkpoint against a random baseline. Results land in `logs/eval_steps.csv`, which the Streamlit dashboard can visualize alongside LangGraph baselines.
+
+
 ### Using the OPSD SQLite database
 
 - Download `time_series.sqlite` from [Open Power System Data](https://data.open-power-system-data.org/time_series/?utm_source=openai) and place it in `data/`.
@@ -45,6 +52,26 @@ env = MicrogridEnv(data_frame=df)
 
 This keeps your training/eval datasets synced with the upstream OPSD snapshot.
 
+### Physics-Informed Battery Thermal Model
+
+- Enable the optional PINN-driven thermal constraints by passing `use_pinn=True` (and optionally `ambient_temperature`, `max_battery_temp`) when constructing `MicrogridEnv` or when wiring up the LangGraph baseline.
+- The model lives in `pinn/battery_temperature.py` and learns a correction term on top of a simple heat-transfer ODE, penalizing the RL agent whenever battery temperatures exceed safe limits.
+
+Example:
+
+```python
+from env.microgrid_env import MicrogridEnv
+
+env = MicrogridEnv(
+    data_path="data/train_data.csv",
+    use_pinn=True,
+    ambient_temperature=24.0,
+    max_battery_temp=45.0,
+)
+```
+
+Each step logs `battery_temp` to the per-step CSV and applies `thermal_penalty` weights when overheating occurs, encouraging physics-consistent behavior.
+
 ## Environment Knobs
 
 `env.microgrid_env.MicrogridEnv` now supports:
@@ -76,6 +103,13 @@ Run `python data/fetch_carbon_intensity.py --hours 48 --region-id 13 --merge-dat
 2. Replace any overlapping `carbon_intensity` values in `data/eval_data.csv` with the chosen column (`--merge-column forecast|actual`).
 
 The script accepts outward postcodes (e.g., `--postcode SW1`), merges via nearest-timestamp matching (±30 min), and can also leave the live CSV standalone if you want the model to learn from historical values later.
+
+Already downloaded the dataset from the NESO portal? Pass `--local-csv data/regional_carbon_intensity.csv` to reuse it offline:
+
+```
+python data/fetch_carbon_intensity.py --local-csv data/regional_carbon_intensity.csv \
+  --merge-dataset data/eval_data.csv --merge-column forecast
+```
 
 ## LangGraph Multi-Agent Baseline
 
@@ -147,5 +181,6 @@ python -c "import pandas as pd; print(pd.read_csv('logs/train_steps.csv').head()
 - `baselines/`: Baseline strategies
 - `dashboard/`: Streamlit UI
 - `hpc/`: Ray-powered training entry point and SLURM template
+- `pinn/`: Physics-informed models (battery thermal PINN)
 - `train.py`: RL training script
 - `evaluate.py`: Evaluation script

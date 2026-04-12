@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hours", type=int, default=36, help="If --end not supplied, fetch this many hours after start.")
     parser.add_argument("--region-id", type=int, help="Filter regional data by region id (1-17).")
     parser.add_argument("--postcode", help="Filter regional data by outward postcode (e.g. SW1).")
+    parser.add_argument("--local-csv", help="Use an existing NESO CSV download instead of calling the API.")
     parser.add_argument("--output", default="data/carbon_intensity_live.csv", help="CSV path for the downloaded data.")
     parser.add_argument(
         "--merge-dataset",
@@ -96,6 +97,47 @@ def _flatten_regional(entries: List[Dict]) -> List[Dict]:
     return rows
 
 
+def _load_local_csv(csv_path: Path, start: Optional[datetime], end: Optional[datetime]) -> List[Dict]:
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Local CSV '{csv_path}' not found.")
+    df = pd.read_csv(csv_path)
+    if "datetime" not in df.columns:
+        raise ValueError("Local CSV must contain a 'datetime' column.")
+    df["from"] = pd.to_datetime(df["datetime"], utc=True)
+    if start:
+        df = df[df["from"] >= start]
+    if end:
+        df = df[df["from"] <= end]
+    if df.empty:
+        return []
+    value_cols = [c for c in df.columns if c not in {"datetime", "from"}]
+    if not value_cols:
+        raise ValueError("Local CSV must contain at least one regional column.")
+    df = df.melt(id_vars=["from"], value_vars=value_cols, var_name="region_name", value_name="forecast")
+    df = df.dropna(subset=["forecast"])
+    df = df.rename(columns={"from": "from_ts"})
+    step = pd.Series(pd.unique(df["from_ts"])).sort_values().diff().dropna().mode()
+    if not step.empty:
+        delta = step.iloc[0].to_pytimedelta()
+    else:
+        delta = timedelta(minutes=30)
+    df["to_ts"] = df["from_ts"] + delta
+    rows = [
+        {
+            "from": row.from_ts.isoformat(),
+            "to": row.to_ts.isoformat(),
+            "forecast": float(row.forecast),
+            "actual": None,
+            "index": None,
+            "region_id": None,
+            "region_name": row.region_name,
+            "dnoregion": row.region_name,
+        }
+        for row in df.itertuples(index=False)
+    ]
+    return rows
+
+
 def _write_csv(rows: List[Dict], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8") as handle:
@@ -133,13 +175,18 @@ def _merge_with_dataset(dataset_path: Path, rows: List[Dict], column: str) -> No
 
 def main():
     args = parse_args()
-    start = _parse_dt(args.start) or default_window()["start"]
-    end = _parse_dt(args.end) or (start + timedelta(hours=args.hours))
+    start = _parse_dt(args.start)
+    end = _parse_dt(args.end)
+    if not args.local_csv:
+        start = start or default_window()["start"]
+        end = end or (start + timedelta(hours=args.hours))
 
     if args.region_id and args.postcode:
         raise ValueError("Specify only one of --region-id or --postcode.")
 
-    if args.region_id or args.postcode:
+    if args.local_csv:
+        rows = _load_local_csv(Path(args.local_csv), start, end)
+    elif args.region_id or args.postcode:
         entries = fetch_regional_intensity(start, end, region_id=args.region_id, postcode=args.postcode)
         rows = _flatten_regional(entries)
     else:
